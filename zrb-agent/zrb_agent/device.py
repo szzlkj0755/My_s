@@ -5,6 +5,7 @@
 
 import subprocess
 import time
+from pathlib import Path
 
 
 def denormalize(x_norm: float, y_norm: float, width: int, height: int) -> tuple[int, int]:
@@ -37,11 +38,20 @@ class Device:
         self._last_stderr = ""
 
     def _run(self, args: list[str]) -> str:
-        """执行 adb 命令并返回 stdout；stderr 留给调用方检查。"""
+        """执行 adb 命令并返回 stdout；返回码非零一律抛错。
+
+        `adb pull` 失败时会在 stdout 报错、returncode=1 且 stderr 为空，
+        只看 stderr 会把“adb 说失败”当成成功，所以这里必须检查返回码。
+        """
         completed = subprocess.run(
             [self.adb_path, "-s", self.serial] + args, capture_output=True, text=True
         )
         self._last_stderr = completed.stderr or ""
+        if completed.returncode != 0:
+            message = (completed.stdout or completed.stderr or "").strip()
+            raise RuntimeError(
+                f"adb {' '.join(args)} 失败(rc={completed.returncode}): {message}"
+            )
         return completed.stdout or ""
 
     def tap(self, x: int, y: int) -> str:
@@ -87,12 +97,17 @@ class Device:
         """导出 UI 层级并拉回本地。
 
         设备未进入空闲状态时 uiautomator 会失败，最多重试 2 次，每次间隔 800ms。
+        `_run` 现在会对非零返回码抛错，因此这里把失败也纳入重试。
         """
         remote_path = "/sdcard/ui.xml"
         for attempt in range(3):
-            self._run(["shell", "uiautomator", "dump", remote_path])
-            if "could not get idle state" not in self._last_stderr:
-                break
+            try:
+                self._run(["shell", "uiautomator", "dump", remote_path])
+                if "could not get idle state" not in self._last_stderr:
+                    break
+            except RuntimeError:
+                if attempt == 2:
+                    raise
             if attempt < 2:
                 time.sleep(0.8)
         else:
@@ -126,10 +141,15 @@ class Device:
         不能用 `adb shell wm size`：它报的是面板物理方向（例如横屏 1920x1080），
         而 uiautomator 的 bounds 和截图都是旋转后的方向（例如竖屏 1080x1920）。
         这里截一张图、读 PNG 头里的真实像素宽高，三者只在同一坐标系下一致。
+        本地旧文件会遮蔽本次截图，因此先删掉，并确认 adb pull 真的产生了非空文件。
         """
+        local = Path(local_path)
+        local.unlink(missing_ok=True)
         self._run(["shell", "screencap", "-p", probe_path])
-        self._run(["pull", probe_path, local_path])
-        return _png_size(local_path)
+        self._run(["pull", probe_path, str(local)])
+        if not local.is_file() or local.stat().st_size == 0:
+            raise RuntimeError(f"screencap 未产生本地文件：{local_path}")
+        return _png_size(str(local))
 
     def current_focus(self) -> str:
         """返回 dumpsys window 中 mCurrentFocus= 所在的那一行。"""
