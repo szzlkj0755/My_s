@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import os
 import re
-import tempfile
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Callable
 
 from .device import denormalize
@@ -47,37 +47,56 @@ class ExecResult:
     elapsed_ms: int = 0
 
 
+# UI 树落盘用相对路径：WSL 下 adb 是 Windows 程序，/tmp 绝对路径会被它
+# 解析成 Windows 的另一个盘（D:\tmp），adb 报成功但 Python 永远读不到。
+_DUMP_FILE = f".zrb_ui_dump_{os.getpid()}.xml"
+
+
 def _dump_xml(device) -> str:
-    """导出当前 UI 树并读回 XML 文本（最小实现，不改 perceive.py）。"""
-    handle, path = tempfile.mkstemp(suffix=".xml")
-    os.close(handle)
+    """导出当前 UI 树并读回 XML 文本（最小实现，不改 perceive.py）。
+
+    相对路径 + 先删旧文件 + 校验非空：既避开 WSL/adb.exe 的盘符差异，
+    也避免把上一次的残留或 0 字节文件当成有效 UI 树。
+    """
+    path = Path(_DUMP_FILE)
+    path.unlink(missing_ok=True)
     try:
-        device.dump_ui(path)
-        with open(path, encoding="utf-8") as stream:
-            return stream.read()
+        device.dump_ui(str(path))
+        if not path.is_file() or path.stat().st_size == 0:
+            raise RuntimeError(f"dump_ui 未产生本地文件：{path}")
+        return path.read_text(encoding="utf-8")
     finally:
-        os.unlink(path)
+        path.unlink(missing_ok=True)
 
 
 def _image_nodes(xml_text: str) -> list[tuple[tuple[int, int, int, int], tuple[int, int]]]:
-    """从 UI 树里挑出可点击的图片节点，按“从上到下、从左到右”排序。
+    """挑出图片节点，返回 (节点 bounds, 点击中心)，按行优先排序。
 
-    图片选择器的格子布局因机型而异，这里只认两种特征：resource-id 含 `image`，
-    或 class 是 ImageView；再用 bounds 排序，避免硬编码任何坐标。
+    选择器常把 clickable 放在格子父节点上（缩略图自身 clickable=false），
+    所以自身不可点击时向上找最近的 clickable 祖先并点它的中心。resource-id
+    明确含 image/thumbnail 的节点优先，避免把顶栏图标当成第一张图。
     """
-    nodes: list[tuple[tuple[int, int, int, int], tuple[int, int]]] = []
-    for node in ET.fromstring(xml_text).iter("node"):
+    root = ET.fromstring(xml_text)
+    parent = {child: node for node in root.iter() for child in node}
+    found: list[tuple[int, tuple[int, int, int, int], tuple[int, int]]] = []
+    for node in root.iter("node"):
         resource_id = (node.get("resource-id") or "").lower()
-        klass = node.get("class") or ""
-        if node.get("clickable") != "true":
+        named = "image" in resource_id or "thumbnail" in resource_id
+        if not named and not (node.get("class") or "").endswith("ImageView"):
             continue
-        if "image" not in resource_id and not klass.endswith("ImageView"):
+        bounds = _BOUNDS_RE.search(node.get("bounds") or "")
+        clickable = node
+        while clickable is not None and clickable.get("clickable") != "true":
+            clickable = parent.get(clickable)
+        if bounds is None or clickable is None:
             continue
-        matched = _BOUNDS_RE.search(node.get("bounds") or "")
-        if matched is None:
-            continue
-        x1, y1, x2, y2 = (int(value) for value in matched.groups())
-        nodes.append(((x1, y1, x2, y2), ((x1 + x2) // 2, (y1 + y2) // 2)))
+        x1, y1, x2, y2 = (int(value) for value in bounds.groups())
+        found.append((0 if named else 1, (x1, y1, x2, y2),
+                      ((x1 + x2) // 2, (y1 + y2) // 2)))
+    if not found:
+        return []
+    best = min(rank for rank, _, _ in found)
+    nodes = [(box, center) for rank, box, center in found if rank == best]
     nodes.sort(key=lambda item: (item[0][1], item[0][0]))
     return nodes
 

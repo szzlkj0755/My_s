@@ -1,15 +1,34 @@
 """executor.py 的单元测试：全部使用假 Device，不连接 adb、不 import adb。"""
 
+import inspect
 import os
 import re
 import sys
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from zrb_agent.executor import ACTIONS, ExecStatus, Executor
+from zrb_agent.executor import ACTIONS, ExecStatus, Executor, _DUMP_FILE, _dump_xml
+
+THUMBNAIL_XML = """<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<hierarchy rotation="0">
+  <node class="android.widget.ImageView" clickable="true" bounds="[900,900][1000,1000]" />
+  <node class="android.widget.GridView" clickable="false" bounds="[0,200][1080,1920]">
+    <node class="android.widget.FrameLayout" clickable="true" bounds="[0,200][200,400]">
+      <node class="android.widget.ImageView"
+            resource-id="com.android.providers.media.module:id/icon_thumbnail"
+            clickable="false" bounds="[0,200][200,400]" />
+    </node>
+    <node class="android.widget.FrameLayout" clickable="true" bounds="[200,400][400,600]">
+      <node class="android.widget.ImageView"
+            resource-id="com.android.providers.media.module:id/icon_thumbnail"
+            clickable="false" bounds="[200,400][400,600]" />
+    </node>
+  </node>
+</hierarchy>"""
 
 GALLERY_XML = """<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
 <hierarchy rotation="0">
@@ -67,6 +86,8 @@ class FakeDevice:
 
     def dump_ui(self, local_path):
         self._emit("dump_ui", local_path)
+        if self._xml is None:  # 模拟 adb 把文件写到 Python 读不到的位置
+            return
         with open(local_path, "w", encoding="utf-8") as stream:
             stream.write(self._xml)
 
@@ -155,6 +176,42 @@ class ExecutorTest(unittest.TestCase):
         result = self.executor.execute(make_action("pick_from_gallery", index=2))
         self.assertEqual(result.status, ExecStatus.OK)
         self.assertEqual(self.device.calls[-1], ("tap", (100, 650)))
+
+    def test_pick_from_gallery_uses_clickable_parent_thumbnail(self):
+        """缩略图自身 clickable=false 时点父格子的中心，且不能被顶栏图标抢索引。"""
+        self.device._xml = THUMBNAIL_XML
+        first = self.executor.execute(make_action("pick_from_gallery", index=0))
+        second = self.executor.execute(make_action("pick_from_gallery", index=1))
+        self.assertEqual(first.status, ExecStatus.OK)
+        self.assertEqual(second.status, ExecStatus.OK)
+        taps = [call for call in self.device.calls if call[0] == "tap"]
+        self.assertEqual(taps, [("tap", (100, 300)), ("tap", (300, 500))])
+
+    def test_dump_xml_uses_relative_path_without_tempfile(self):
+        source = inspect.getsource(_dump_xml)
+        self.assertNotIn("tempfile", source)
+        self.assertNotIn('"/tmp', source)
+        self.device._xml = GALLERY_XML
+        self.executor.execute(make_action("pick_from_gallery", index=0))
+        dump_path = next(args[0] for name, args in self.device.calls if name == "dump_ui")
+        self.assertFalse(os.path.isabs(dump_path), dump_path)
+
+    def test_dump_xml_never_reads_stale_file(self):
+        """adb 没把文件写到 Python 能读的位置时，绝不能读上一次的残留。"""
+        stale = Path(_DUMP_FILE)
+        stale.write_text("<hierarchy>STALE</hierarchy>", encoding="utf-8")
+        self.addCleanup(stale.unlink, missing_ok=True)
+        self.device._xml = None
+        result = self.executor.execute(make_action("pick_from_gallery", index=0))
+        self.assertEqual(result.status, ExecStatus.FAILED)
+        self.assertIn("未产生本地文件", result.detail)
+        self.assertNotIn("tap", [name for name, _ in self.device.calls])
+
+    def test_dump_xml_rejects_empty_file(self):
+        self.device._xml = ""
+        result = self.executor.execute(make_action("pick_from_gallery", index=0))
+        self.assertEqual(result.status, ExecStatus.FAILED)
+        self.assertIn("未产生本地文件", result.detail)
 
     def test_pick_from_gallery_without_image_nodes(self):
         self.device._xml = (
