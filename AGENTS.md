@@ -30,3 +30,9 @@ dependency updates unless the ticket asks for them.
 
 A reorder/refactor PR must say「语义不变」and include a test for the decision direction;
 `forbidden_regions` containing the device region means reject, never whitelist.
+
+## adb 写本地文件
+
+任何涉及“adb 向本地写文件”的改动，必须在真机上验证一次文件真的落在 Python 能读到的地方。
+WSL 下 `adb.exe` 是 Windows 进程，绝对路径 `/tmp/x` 会被它解析成 `D:\tmp\x`：
+用相对路径，先删旧文件，并检查写出的文件非空。`python3 zrb-agent/scripts/smoke_executor.py` 覆盖这条。
