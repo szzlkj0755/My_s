@@ -54,10 +54,12 @@ class PerceiveTest(unittest.TestCase):
         self.assertEqual(len(find_elements(self.elements, contains="报名")), 1)
 
     def test_tap_target_hit(self) -> None:
-        self.assertEqual(tap_target(self.elements, contains="立即报名"), (540, 1863))
+        self.assertEqual(tap_target(self.elements, dump_id=self.elements[0].dump_id,
+                                    contains="立即报名"), (540, 1863))
 
     def test_tap_target_miss(self) -> None:
-        self.assertIsNone(tap_target(self.elements, contains="不存在的东西"))
+        self.assertIsNone(tap_target(self.elements, dump_id=self.elements[0].dump_id,
+                                     contains="不存在的东西"))
 
     def test_classify_detail_page(self) -> None:
         result = classify_detail_page(build_page_state(DETAIL_XML, ".Detail"))

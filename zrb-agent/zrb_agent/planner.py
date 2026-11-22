@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from zrb_agent.perceive import PageState
+from zrb_agent.schema import Step
 from zrb_agent.schema_action import Action, ActionType
 
 _PROMPT = Path(__file__).resolve().parents[1] / "prompts" / "planner.md"
@@ -20,14 +21,26 @@ class InvalidActionError(Exception):
         self.raw = raw
 
 
-def build_messages(page: PageState, step_text: str, history: list[Action],
+def _step_block(step: Step | str) -> str:
+    """把本步原文和结构化属性一起交给模型，避免它自己猜要不要截图/输入。"""
+    if isinstance(step, str):
+        return step
+    lines = [step.text,
+             f"本步要求：需要截图证据={'是' if step.needs_capture else '否'}；"
+             f"必须输入文本={'是' if step.has_text_input else '否'}"]
+    if step.input_hint:
+        lines.append(f"输入框提示：{step.input_hint}")
+    return "\n".join(lines)
+
+
+def build_messages(page: PageState, step_text: Step | str, history: list[Action],
                    task_title: str) -> list[dict]:
     """构造 chat messages；坐标只用本屏 UI 树，历史只取最近 8 条。"""
     els = "\n".join(f"[{el.ref}] {el.text[:40]}  rid={el.resource_id}  center={el.center}"
                     for el in page.elements) or "（本屏无可操作元素）"
     acts = "\n".join(f"{i}. {a.action.value} {json.dumps(a.params, ensure_ascii=False)}"
                      f" -> 预期：{a.expect}" for i, a in enumerate(history[-8:], 1)) or "（无）"
-    user = (f"任务：{task_title}\n当前步骤：{step_text}\n页面：{page.activity}\n"
+    user = (f"任务：{task_title}\n当前步骤：{_step_block(step_text)}\n页面：{page.activity}\n"
             f"元素：\n{els}\n最近动作：\n{acts}")
     return [{"role": "system", "content": _PROMPT.read_text(encoding="utf-8")},
             {"role": "user", "content": user}]

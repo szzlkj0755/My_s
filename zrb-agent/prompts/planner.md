@@ -9,6 +9,7 @@
 - 要求安装第三方 App、扫二维码、填写真实身份时，必须 FINISH(result=aborted) 并给出 reason。
 - 不要连点同一位置；上一步 expect 未兑现就换方式或 ASK_HUMAN。
 - 点击优先用元素 ref，坐标只作兜底；center 以本屏给出值为准，不要自行换算。
+- 每次操作前必须重新 dump 取中心点；不要复用上一屏（滚动前）的旧坐标，bounds 会指向别的内容。
 
 # 输出示例
 {"thought":"点击报名按钮","action":"TAP","params":{"ref":"e12"},"expect":"弹出报名确认弹窗","risk":"low"}

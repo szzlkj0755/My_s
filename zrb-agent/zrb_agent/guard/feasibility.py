@@ -60,7 +60,7 @@ _AUDIENCE_TERMS = (
 def _login_text(bounty: Bounty) -> str:
     """把可能暴露登录态的三个来源拼成一段文本：type、limite 与步骤。"""
     return " ".join(
-        part for part in (bounty.type, bounty.limite, *bounty.steps) if part
+        part for part in (bounty.type, bounty.limite, *bounty.step_texts) if part
     )
 
 
@@ -86,7 +86,7 @@ def check_feasibility(bounty: Bounty) -> tuple[Verdict, AbortReason | None]:
     if reason is not None:
         return Verdict.ABORT, reason
 
-    text = " ".join(bounty.steps)
+    text = " ".join(bounty.step_texts)
     if any(term in text for term in _ALIPAY_TERMS):
         return Verdict.ABORT, AbortReason.NEEDS_ALIPAY
     if "保存图片" in text:
@@ -110,7 +110,7 @@ def check_feasibility(bounty: Bounty) -> tuple[Verdict, AbortReason | None]:
     for match in _OPEN_APP_PATTERN.finditer(text):
         if match.group(1) not in _BROWSER_WHITELIST:
             return Verdict.ABORT, AbortReason.NEEDS_THIRD_PARTY_APP
-    steps = [step.strip() for step in bounty.steps if step.strip()]
+    steps = [step.strip() for step in bounty.step_texts if step.strip()]
     # 只要有一条步骤说清了，这单就还能继续做，所以用 all 而不是 any；
     # 长度上限避免误杀「按提示操作后截图上传」这类带具体动作的步骤。
     if not steps or all(_is_vague(step) for step in steps):

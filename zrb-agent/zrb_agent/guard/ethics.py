@@ -24,7 +24,7 @@ def check_ethics(bounty: Bounty) -> AbortReason | None:
         return AbortReason.REGION_REJECTED
     if bounty.allowed_regions and DEVICE_REGION not in bounty.allowed_regions:
         return AbortReason.REGION_REJECTED
-    text = " ".join(bounty.steps)
+    text = " ".join(bounty.step_texts)
     if any(term in text for term in _VPN_TERMS):
         return AbortReason.REQUIRES_VPN
     if "姓名" in text and any(term in text for term in _IDENTITY_TERMS):
