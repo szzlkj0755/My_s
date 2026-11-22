@@ -99,6 +99,22 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # noqa: BLE001
             check("pick_from_gallery 在相册页成功", repr(exc), False)
 
+    # 4) capture_evidence：截图 → 相册入库（MediaStore 能查到）
+    if executor is not None:
+        name = f"smoke_{int(time.time())}"
+        try:
+            result = executor.execute(SimpleNamespace(
+                action="capture_evidence", params={"name": name}
+            ))
+            check("capture_evidence 截图", result.detail, result.status.value == "OK")
+            time.sleep(1.5)
+            rows = device._run(["shell", "content", "query", "--uri",
+                                "content://media/external/images/media",
+                                "--projection", "_data"])
+            check("capture_evidence 相册入库", name, name in rows)
+        except Exception as exc:  # noqa: BLE001
+            check("capture_evidence 相册入库", repr(exc), False)
+
     print(f"\n{sum(results)}/{len(results)} PASS")
     return 0 if all(results) else 1
 
